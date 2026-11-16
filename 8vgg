@@ -1,0 +1,157 @@
+import os
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import numpy as np
+
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.applications.vgg16 import preprocess_input
+from tensorflow.keras.layers import (
+    Dense, Dropout, GlobalAveragePooling2D
+)
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+
+# Dataset paths
+train_path = "dataset/train"
+val_path = "dataset/validation"
+test_path = "dataset/test"
+
+
+# Load datasets
+train_ds = tf.keras.utils.image_dataset_from_directory(
+    train_path,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    label_mode="int"
+)
+
+val_ds = tf.keras.utils.image_dataset_from_directory(
+    val_path,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    label_mode="int"
+)
+
+test_ds = tf.keras.utils.image_dataset_from_directory(
+    test_path,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    label_mode="int",
+    shuffle=False
+)
+
+class_names = train_ds.class_names
+num_classes = len(class_names)
+
+# Preprocessing
+def preprocess(images, labels):
+    images = preprocess_input(images)
+    return images, labels
+
+train_ds = train_ds.map(preprocess)
+val_ds = val_ds.map(preprocess)
+test_ds = test_ds.map(preprocess)
+
+# Load VGG16 model
+base_model = VGG16(
+    weights="imagenet",
+    include_top=False,
+    input_shape=(224, 224, 3)
+)
+
+# Freeze pretrained layers
+base_model.trainable = False
+
+# Add custom classification layers
+x = GlobalAveragePooling2D()(base_model.output)
+x = Dense(128, activation='relu')(x)
+x = Dropout(0.5)(x)
+
+# Output layer
+if num_classes == 2:
+    output = Dense(1, activation='sigmoid')(x)
+    loss_function = 'binary_crossentropy'
+
+    def prepare_labels(ds):
+        return ds.map(
+            lambda images, labels:
+            (images, tf.cast(tf.expand_dims(labels, -1), tf.float32))
+        )
+
+    train_ds = prepare_labels(train_ds)
+    val_ds = prepare_labels(val_ds)
+    test_ds = prepare_labels(test_ds)
+
+else:
+    output = Dense(num_classes, activation='softmax')(x)
+    loss_function = 'sparse_categorical_crossentropy'
+
+# Create model
+model = Model(inputs=base_model.input, outputs=output)
+
+# Compile model
+model.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss=loss_function,
+    metrics=['accuracy']
+)
+
+# Display model summary
+model.summary()
+
+# Train model
+history = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=5
+)
+
+# Evaluate model
+test_loss, test_accuracy = model.evaluate(test_ds)
+
+print("Test Loss:", test_loss)
+print("Test Accuracy:", test_accuracy)
+
+# Plot accuracy
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+
+plt.title("VGG16 Accuracy")
+plt.xlabel("Epochs")
+plt.ylabel("Accuracy")
+plt.legend()
+plt.grid()
+plt.show()
+
+# Plot loss
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+
+plt.title("VGG16 Loss")
+plt.xlabel("Epochs")
+plt.ylabel("Loss")
+plt.legend()
+plt.grid()
+plt.show()
+
+# Show predictions for sample images
+for images, labels in test_ds.take(1):
+    predictions = model.predict(images)
+
+    for i in range(min(5, len(images))):
+        if num_classes == 2:
+            predicted_class = int(predictions[i][0] >= 0.5)
+        else:
+            predicted_class = np.argmax(predictions[i])
+
+        plt.imshow(
+            np.clip(
+                images[i].numpy() + [103.939, 116.779, 123.68],
+                0, 255
+            ).astype("uint8")
+        )
+
+        print("Predicted:", class_names[predicted_class])
+        plt.title("Predicted: " + class_names[predicted_class])
+        plt.axis('off')
+        plt.show()
